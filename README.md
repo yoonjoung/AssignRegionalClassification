@@ -3,4 +3,4 @@ This is an R Markdown document to assign UN's regional classification to DHS cou
 
 There are three sections in the markdown file: 1. getting DHS country list, 2. getting UNSD's list, and 3. merging the two. 
 
-Output is published in RPubs:(http://rpubs.com/YJ_Choi/485032). 
+Output is published in RPubs:(http://rpubs.com/YJ_Choi/AssignRegionalClassification). 

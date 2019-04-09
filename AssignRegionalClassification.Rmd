@@ -1,0 +1,147 @@
+```{r intro, echo=FALSE, results="hide"}
+date<-as.Date(Sys.time(	), format='%d%b%Y')
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, comment = NA)
+```
+
+- Author: YJ Choi  
+- Date: `r date` 
+
+This is an R Markdown document to assign UN's regional classification to DHS countries (or any group of countries). In multi-country studies, regional classification is often an important variable. Different classification methods are used per various purposes, but a widely used standard classification is from UN Statistics Division's ["standard country or area codes for statistical use (__M49 standard__)"](https://unstats.un.org/unsd/methodology/m49/). The M49 standard classification is used as reference in this markdown. The markdown file is available at [GitHub](https://github.com/yoonjoung/AssignRegionalClassification).
+
+There are three sections in this document: 1. getting DHS country list, 2. getting UNSD's list, and 3. merging the two. 
+
+## 1. DHS country list
+See DHS website for countries that have conducted DHS surveys: (https://www.dhsprogram.com/Where-We-Work/). 
+
+Figure 1. Countries where DHS surveys have been conducted.
+![Alt text](/Users/YoonJoung Choi/Dropbox/0 Project\AssignRegionalClassification/DHScountries.png)
+
+Access the list of countries from DHS API (http://api.dhsprogram.com/rest/dhs/countries?f=html). The API data also include regional classification variables ("region" and "sub-region") that are used for the survey program purposes, which largely match with the UN classification.   
+```{r DHS}
+url<-("http://api.dhsprogram.com/rest/dhs/countries?f=json")
+
+suppressPackageStartupMessages(library(jsonlite)) # for fromJSON
+suppressPackageStartupMessages(library(data.table)) # for data.table
+suppressPackageStartupMessages(library(dplyr))
+
+# read DHS API country list 
+jsondata<-fromJSON(url) 
+# create data frame with countries & tidy 
+ctry_DHS<-data.table(jsondata$Data)
+ctry_DHS<-ctry_DHS %>%
+    rename (country	=	CountryName) %>% 
+    rename (DHSregion1	=	RegionName) %>%
+    rename (DHSregion2	=	SubregionName) %>%
+    select (country, DHSregion1, DHSregion2)
+```
+
+## 2. UNSD country list  
+Access the UNSD's list and classification on the [web] (http://api.dhsprogram.com/rest/dhs/countries?f=html). Then, scrape the web table. 
+```{r UNSD}
+url <- "https://unstats.un.org/unsd/methodology/m49/"
+
+suppressPackageStartupMessages(library(XML)) # for HTMLparse
+suppressPackageStartupMessages(library(RCurl)) # for readHTMLTable
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(Hmisc))
+# download html page 
+html <- httr::POST(url = url, body = "")
+# read the page 
+doc <- htmlParse(html)
+# create data frame with countries & tidy
+dtaraw <- readHTMLTable(doc)[[7]]
+ctry_UNSD<-dtaraw %>%
+    rename (country	=	"Country or Area") %>% 
+    rename (M49	=	"M49 code") %>% 
+    rename (ISOalpha3	=	"ISO-alpha3 code") %>% 
+    select(country, M49, ISOalpha3) 
+```
+Because the web table presents the region and country names in different row (see Figure 2), assign the lowest-level classification to individual countries. From there, higher level aggregation/grouping can be made as needed. Finally, replace county names as needed to merge with DHS country names. 
+
+Figure 2. Geographic regions table on the UNSD website (snapstop)
+![Alt text](/Users/YoonJoung Choi/Dropbox/0 Project\AssignRegionalClassification/UNSDtable.png)
+
+```{r UNSDmore, results="hide"}
+# Assign sub-region names
+head(ctry_UNSD, 20)
+str(ctry_UNSD)
+ctry_UNSD$country<-as.character(ctry_UNSD$country)
+ctry_UNSD<-ctry_UNSD %>% 
+    mutate(
+    UNSDsubregion=country,
+    UNSDsubregion=ifelse(ISOalpha3!="", "", UNSDsubregion)
+    )
+for (i in 1:nrow(ctry_UNSD)){
+    if (ctry_UNSD[i,4]==""){
+    ctry_UNSD[i,4]=ctry_UNSD[i-1,4]
+    }}
+# Keep only country rows and replace country names as needed
+ctry_UNSD<-ctry_UNSD %>% 
+    filter(ISOalpha3!="") %>% 
+    select(country, UNSDsubregion) %>% 
+    mutate(
+    country = ifelse(country == "Bolivia (Plurinational State of)", "Bolivia", country) ,
+    country = ifelse(country == "Cabo Verde", "Cape Verde", country) , 
+    country = ifelse(country == "Democratic Republic of the Congo", "Congo Democratic Republic", country) ,
+    country = ifelse(country == "Côte d'Ivoire", "Cote d'Ivoire", country) ,
+    country = ifelse(country == "Kyrgyzstan", "Kyrgyz Republic", country) , 
+    country = ifelse(country == "Republic of Moldova", "Moldova", country) , 
+    country = ifelse(country == "United Republic of Tanzania", "Tanzania", country) ,
+    country = ifelse(country == "Viet Nam", "Vietnam", country) 
+    )
+label(ctry_UNSD$UNSDsubregion) <- "Sub-region, UNSD Methodology 49"
+```
+
+## 3. Merge DHS and UNSD M49 lists
+Assess the two lists/data.  
+```{r mergeprep, results="hide"}
+dim(ctry_DHS)
+dim(ctry_UNSD)
+names(ctry_DHS)
+names(ctry_UNSD)
+obsDHS<-nrow(ctry_DHS)
+obsUNSD<-nrow(ctry_UNSD)
+```
+There are `r obsDHS` "DHS countries", and they need to be merged with the UNSD's list of `r obsUNSD` countries. 
+```{r merge, results="hide"}
+ctry<-left_join(ctry_DHS, ctry_UNSD, by = "country")
+```
+Make sure there the merged data have `r obsDHS` countries, and no missing "UNSDsubregion". __Especially__, check 'Cote d'Ivoire' (which often seems to have problems in merging when based on the country name), has UNSD subregion value. If not, assign it. 
+```{r mergecheck}
+nrow(ctry)
+addmargins(table(ctry$UNSDsubregion))
+```
+```{r mergecheckCI}
+# Check Cote d'Ivoire
+test1<-filter(ctry, UNSDsubregion=="Western Africa")
+table(test1$country)
+test2<-filter(ctry, DHSregion2=="Western Africa")
+table(test2$country)
+# replace UNSDsubregion 
+ctry<-ctry %>%
+    mutate(
+    UNSDsubregion = ifelse(DHSregion2=="Western Africa", "Western Africa", UNSDsubregion) 
+    )
+addmargins(table(ctry$UNSDsubregion))
+```
+Finally, a higher-level classification can be created depending on study purposes. In this example, a three-category grouping is done.
+```{r studyregion}
+ctry<-ctry %>%
+    mutate(
+    studyregion="", 
+    studyregion=ifelse(UNSDsubregion=="Middle Africa" | 
+                          UNSDsubregion=="Western Africa", 
+                     "Centera and Western Africa", studyregion), 
+    studyregion=ifelse(UNSDsubregion=="Eastern Africa" | 
+                          UNSDsubregion=="Southern Africa", 
+                     "Southern and Eastern Africa", studyregion), 
+    studyregion=ifelse(studyregion=="", 
+                     "Other Regions", studyregion)
+    )
+addmargins(table(ctry$UNSDsubregion, ctry$studyregion))    
+```
+
+Acknowledgement: Trevor Croft at ICF International made helpful suggestions for the UNSD source and the web scraping code.  
